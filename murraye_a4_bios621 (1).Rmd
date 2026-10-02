@@ -1,0 +1,297 @@
+---
+title: "murraye_A4_bios621"
+author: "Eileen Murray"
+date: "2025-12-12"
+output: 
+  pdf_document:
+    latex_engine: xelatex
+
+---
+
+## Background
+
+Moen et al. (2016) sought to demonstrate how different statistical approaches can yield to different results. In particular Moen et al. (2016) sought to highlight the importance of utilizing the mixed-effect approach especially with clustered, and hierarchical data. To demonstrate such, Moen et al. (2016) highlighted how common statistical analyses using mice and neurons usually sample multiple neurons per mouse. However, the correlation of neurons from the same mouse is often ignored.
+
+As discussed in lecture, hierarchical and longitundinal data ought to be treated differently from other forms of data as they show repeated measures over time, and these measures are oft correlated and nested within individual observation units. Therefore, they are best treated in such a manner that account for this fact. Therefore, fixed and random effects and inter-class correlation ought to be utilized.
+
+## 0. Uploading & cleaning the dataset
+
+Before beginning, I will upload the dataset, and recode any variables as necessary. In particular, I am interested in Soma sizes, and mouse ID.
+
+However, it is important to note the names, and meanings behind the other variables present in the dataset as this may be important later. It is also important to note that the authors were primarily studying the impact of Pten and fatty acid delivery upon soma size of neurons within the mice.
+
+**Variable names**:
+
+somasize = continuous variable of soma size for each neuron
+
+fattyacid (fa) = factor of 0, 1, or 2 indicating no treatment, vehicle control, or fatty acid treatment respectively
+
+pten = factor of 0 or 1 indicating control or Pten shRNA, respectively
+
+mouseid = factor specifying mouse identity for each neuron
+
+meanss = mean soma size
+
+prp = proportion of cells with Pten knockdown per mouse
+
+numobs = number of neuron measurements per mouse
+
+```{r}
+library(readr)
+smdf <- read_csv("PtenAnalysisData.csv") 
+```
+
+## 1.Boxplots of Soma Size & Mouse
+
+Now we can create the boxplot as instructed of soma size per mouse including individual data points with jitter:
+
+```{r}
+library(ggplot2)
+ggplot(smdf, aes(x = mouseid, y = somasize)) +
+  geom_boxplot(notch = TRUE, outlier.shape = NA) +
+  geom_jitter(aes(color = mouseid), width = 0.2, alpha = 0.4) +
+  theme_grey(base_size = 12) +
+  theme(legend.position = "none") +
+  labs(title = "Soma Size by Mouse",
+       y = "Soma Size", x = "Mouse ID")
+```
+
+Unfortunately, because the data are hierarchical in nature and boxplots are typically used for simple categorical comparisons, this plot doesn’t actually tell us much about differences in soma size by mouse. So, this really calls for a different way to visualize the data.
+
+To further assess this, we can fit a one-way analysis of variance (ANOVA) of soma size by mouse:
+
+```{r}
+fit1way <- lm(somasize ~ factor(mouseid), data=smdf)
+anova(fit1way)
+```
+
+This output shows that mean soma size differs significantly between mice (F = 14.4 on 13 and 1128 degrees of freedom, p < 2.2e-16). This reinforces the point that neurons from the same mouse are not independent, and that we should be modeling somasize as the outcome while accounting for mouse as a grouping factor.
+
+## 2. ICC for Soma Size
+
+Now, the ICC is used to quantify how strongly measurements are correlated within subjects. To estimate it, we first need to fit a random-effects model with no covariates and a random intercept only—exactly as instructed.
+
+This lets us recover the between-mouse variance and the within-mouse residual variance that drive the ICC.
+
+```{r}
+library(nlme)
+
+fitrando <- lme(somasize ~ 1, 
+           data = smdf, 
+           random = ~ 1 | mouseid)
+
+summary(fitrando)
+intervals(fitrando)
+
+```
+
+Now we can compute the ICC:
+
+```{r}
+ICClme <- function(fitrando){
+  vc <- as.numeric(VarCorr(fitrando))
+  vc[1] / (vc[1] + vc[2])
+}
+
+ICClme(fitrando)
+```
+
+**Interpretation**:
+
+The ICC estimate is approximately 0.16, meaning that about 16% of the total variability in soma size is attributable to differences between mice.
+In other words, soma sizes are not highly clustered by mouse. Most of the variation in soma size occurs within mice rather than between them.
+
+## 3. Regression Model and Assumptions of Table 3
+
+Now I am tasked with writing out what the regression model is for each row in table 3, and what the assumptions are. Additionally, I am tasked with discussing if any of the assumptions are in fact false.
+
+However before beginning it may be useful to consider a null and alternative hypothesis for this dataset:
+
+HA: The treatment will impact the soma size.
+H0:The treatment will not impact soma size.
+
+**Row 1: Neuron-level linear regression**:
+
+$$
+somasize_{ij} = \beta_0 + \beta_1 X_{ij} + \varepsilon_{ij}, \quad \varepsilon_{ij} \sim N(0, \sigma^2)
+$$
+
+where $i$ = mouse, $j$ = neuron, and $X_{ij}$ = covariate(s) at the neuron level or mouse level (e.g., fatty acid treatment, Pten status).
+
+This model presumes there is an indepence of observations, linearity, homoscedasiticty, normality of errors. However, independence is violated as the neurons from the same mouse are correlated.
+
+**Row 2: Mouse-level regression (mean); no weighting**:
+
+$$
+\overline{somasize}_{i} = \beta_0 + \beta_1 X_{i} + \varepsilon_{i}
+$$
+
+This model presumes there is independence across the mice, homoscedascity of mouse-level residuals,and normality. However, the homodesacity may be false as some mice have many neurons, and others have few which means the mice are not equal.
+
+**Row 3: Mouse-level regression (mean); analytic weights**:
+
+$$
+\overline{somasize}_{i} = \beta_0 + \beta_1 X_{i} + \varepsilon_{i}, \quad w_i = n_i
+$$
+
+This model presumes there is mouse-level independence, weighted least squares, and normality of mouse-level errors. However, this may be false if the within-mouse variability varies across treatment.
+
+**Row 4: Marginal regression**:
+
+$$
+E(somasize_{ij}) = \beta_0 + \beta_1 X_{ij}
+$$
+
+This model assumes there is a correct mean, a working correlation structure, independence across clusters, and a large enough sample for the asymptotic (robust) standard errors to be valid. However, the assumption that may be violated is if the sample size is too small.
+
+**Row 5: Fixed effect regression**:
+
+$$
+somasize_{ij} = \alpha_i + \beta_1 X_{ij} + \varepsilon_{ij}
+$$
+
+Each mouse gets its own intercept, $\alpha_i$.
+
+This model presumes within-mouse independence of residuals, that there is homosecdasticity and normality within mouse, and that there is sufficient variation of predictors within each mouse. However, within-mouse independence is violated.
+
+**Row 6: Mixed-effect regression**:
+
+$$
+somasize_{ij} = \beta_0 + \beta_1 X_{ij} + u_i + \varepsilon_{ij}
+$$
+
+where $u_i \sim N(0, \tau^2)$ is the between-mouse variance and $\varepsilon_{ij} \sim N(0, \sigma^2)$ is the within-mouse variance.
+
+This model assumes a correct random-effects structure, normality of the random intercepts, normality of residuals, independence of clusters (mice), and linearity of the fixed effects. In practice, it may have no major assumptions violated, because it effectively combines the strengths of the previous models. By treating mouse effects as random intercepts drawn from a common distribution, it accounts for the hierarchical structure of neurons within mice and produces the most robust estimates of treatment effects while properly modeling subject-level variability.
+
+## 4. Repeating Table 3 Analyses
+
+Now, we can recreate the models in table 3 and see if we can achieve the same results:
+
+**Row 1: Neuron-level linear regression**:
+
+```{r}
+neuron_lm <- lm(somasize ~ fa*pten, data = smdf)
+summary(neuron_lm)
+confint(neuron_lm, level = 0.95) 
+```
+
+**Row 2: Mouse-level regression (mean); no weighting**:
+
+```{r}
+library(tidyverse)
+mouse_means <- smdf %>%
+  group_by(mouseid, fa, pten) %>%
+  summarize(mean_soma = mean(somasize), .groups="drop")
+mouse_lm <- lm(mean_soma ~ fa*pten, data = mouse_means)
+summary(mouse_lm)
+confint(mouse_lm, level = 0.95)
+```
+
+**Row 3: Mouse-level regression (mean); analytic weights**:
+
+```{r}
+mouse_means <- smdf %>%
+  group_by(mouseid, fa, pten) %>%
+  summarize(mean_soma = mean(somasize),
+            n_neurons = n(),   
+            .groups = "drop")
+mouse_lm_wt <- lm(mean_soma ~ fa*pten, data = mouse_means,
+                  weights = n_neurons)
+summary(mouse_lm_wt)
+confint(mouse_lm_wt, level = 0.95)
+```
+
+**Row 4: Marginal regression**:
+
+```{r}
+gafit.gee <- gee::gee(somasize ~ fa * pten,
+                    data = smdf,
+                    id = mouseid,
+                    corstr = "exchangeable")
+summary(gafit.gee)
+```
+
+```{r}
+gee_sum <- summary(gafit.gee)
+coef_est <- gee_sum$coefficients[, "Estimate"]
+rob_se <- gee_sum$coefficients[, "Robust S.E."]
+ci_lower <- coef_est - 1.96 * rob_se
+ci_upper <- coef_est + 1.96 * rob_se
+p_value <- 2 * pnorm(-abs(gee_sum$coefficients[, "Robust z"]))
+ci_table <- data.frame(
+  Estimate = coef_est,
+  Lower95 = ci_lower,
+  Upper95 = ci_upper,
+  p_value = p_value,
+  row.names = rownames(gee_sum$coefficients)
+)
+ci_table
+```
+
+**Row 5: Fixed effect regression**:
+
+```{r}
+fe_model <- lm(somasize ~ fa*pten + factor(mouseid), data = smdf)
+summary(fe_model)
+confint(fe_model, level = 0.95)
+```
+
+**Row 6: Mixed-effect regression**:
+
+```{r}
+mixed_model <- lme(somasize ~ fa*pten, data = smdf, random = ~1|mouseid)
+summary(mixed_model)
+```
+
+The table below reports the coefficient for fatty acid treatment (`fa`) from each model. As `fa` is coded numerically (0 = no treatment, 1 = vehicle control, 2 = fatty acid), each coefficient represents the change in soma size for each one-level increase in treatment.
+
+| Model | Coefficient (fa) | Std Err | p-value | 95% CI |
+|:---|---:|---:|---:|:---|
+| Neuron-level linear regression | 3.4819 | 1.2849 | 0.00683 | (0.961, 6.003) |
+| Mouse-level (mean) linear regression; no weighting | 3.4452 | 3.3810 | 0.3184 | (-3.533, 10.423) |
+| Mouse-level regression (mean); analytic weights | 3.4819 | 3.9485 | 0.3866 | (-4.667, 11.631) |
+| Marginal regression (GEE, robust SE) | 2.6322 | 3.2010 | 0.4109 | (-3.642, 8.906) |
+| Fixed effect regression | 6.1549 | 1.9113 | 0.00132 | (2.405, 9.905) |
+| Mixed-effect regression | 2.5552 | 3.4812 | 0.4771 | (-5.030, 10.140) |
+
+: **Table 3. Reproduced Version**
+
+## 5. Interpretation of Results
+
+Below are my interpretations for each model:
+
+**Row 1: Neuron-level linear regression**: Based upon this model, each one-level increase in fatty acid treatment is associated with an increase of about 3.48 in soma size. As the 95% CI does not include zero, this affirms statistical significance. This model would tell us to reject the null hypothesis. However it ought to be noted that this model treats neurons as independent observations.
+
+**Row 2: Mouse-level linear regression (mean); no weighting**: Based upon this model, the effect of the predictor is no longer significant (p>0.05), and rather wide confidence intervals. This model would tell us to not reject the null hypothesis. Of note the model does treat difference in impact at the mouse-level. 
+
+**Row 3: Mouse-level regression (mean); analytic weights**: This model that has weights still suggest the effect of the predictor is still not significant (p>0.05). This model would tell us to not reject the null hypothesis.
+
+**Row 4: Marginal regression**: While the model accounts for clustering within the data, the effect is still not significant (p = 0.41, 95%CI: -3.64, 8.91). This model would tell us to not reject the null hypothesis. Of note, this model accounted for within-mouse correlation. 
+
+**Row 5: Fixed-Effect regression**: This model controls for all between-mouse variability, and the effect is significant (p<0.05). This model would tell us to reject the null hypothesis. This model accounts within-mouse treatmnet effect, but it does not generalize across mice. However, as discussed below, this estimate for fatty acid treatment is not valid.
+
+**Row 6: Mixed-effect regression**: Based upon this model that accounts for clustering within the mice, the effect of treatment is not significant (95%CI: -5.03, 10.14, p>0.05). This model would tell us to not reject the null hypothesis. Of note this model accounts for clustering, and between-mmouse variability. 
+
+One of the major challenges that of which I encountered is the fact the data is hierarchical, which without accounting for different mouse-levels, the neuron-level data was highly correlated. Additionally, I encountered difficulty easily  extracting the 95% CIs for the GEE model, but I was able to do so by taking the coefficients and robust standard errors to the calculate the 95% CIs. Similarly, the GEE summary reports robust z-values rather than p-values, so the p-value in the table above was calculated from the robust z-value.
+
+Regarding the published results, my neuron-level regression yielded a larger coefficient, and a smaller p-value. However, this smaller p-value is not stronger evidence of a treatment effect. Because the neuron-level model treats each neuron as an independent observation, it underestimates the standard error and overstates statistical significance, which is the central point Moen et al. (2016) sought to demonstrate. As for the mouse-level and weighted regression, these are roughly the same but with slightly different estimates and CIs. As for the mixed effects regression, the estimates were slightly different, but the interpretation of significance remains the same. 
+
+Now, the fixed-effects regression greatly differs from the published results. The study by Moen et al. (2016) did not use a fixed-effects model because there is perfect colinearity between the mouse-level variation and the fatty acid treatment—each mouse received only one treatment level. In this case, R did not drop the fatty acid term, but instead dropped one of the mouse indicators (mouse 13), so the coefficient of 6.15 reflects the arbitrary choice of which mouse was dropped rather than a true treatment effect. Consequently, the fixed-effects model in this assignment should not have been included, and its results ought to be disregarded. It was included here only as an example to illustrate the concept.
+
+To visualize the perfect collinearity between mice and treatment, a heatmap of soma size by mouse and fatty acid treatment has been produced below:
+
+```{r}
+library(ggplot2)
+
+ggplot(smdf, aes(x = factor(fa), y = factor(mouseid), fill = somasize)) +
+  geom_tile() +
+  scale_fill_viridis_c(option = "plasma") +
+  labs(title = "Heatmap of Soma Size by Mouse and Fatty Acid Treatment",
+       x = "Fatty Acid Treatment",
+       y = "Mouse ID",
+       fill = "Soma Size") +
+  theme_minimal()
+```
+
+Ultimately, all of this is to demonstrate that it is critical to account for hierarchial data structures. Thus, the most apropriate models would be the GEE model, or the mixed effects models as they account for the clustering present in this type of data structure.
