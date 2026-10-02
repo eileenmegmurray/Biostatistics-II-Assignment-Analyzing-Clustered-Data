@@ -57,7 +57,7 @@ The dataset contains 1,142 neuron soma size measurements from 14 mice, from the 
 
 | File | Description |
 |---|---|
-| `murraye_a4_bios621.Rmd` | R Markdown source code |
+| `murraye_a4_bios621(1).Rmd` | R Markdown source code |
 | `PtenAnalysisData.csv` | Dataset |
 
 ## Reproducing the Analysis
